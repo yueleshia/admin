@@ -1,0 +1,3 @@
+[submodule "assets/sigjs"]
+	path = assets/sigjs
+	url = https://github.com/yueleshia/sigjs

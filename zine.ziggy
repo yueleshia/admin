@@ -1,0 +1,9 @@
+Site {
+    .title = "",
+    .host_url = "https://yueleshia.github.io",
+    .url_path_prefix = "admin",
+    .content_dir_path = "content",
+    .layouts_dir_path = "layouts",
+    .assets_dir_path = "assets",
+    .static_assets = [],
+}

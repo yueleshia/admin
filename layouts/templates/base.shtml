@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head id="head">
+    <meta charset="utf-8">
+    <meta name="viewport" content="initial-scale=1">
+    <title :text="$site.title"></title>
+    <super>
+  </head>
+  <body id="body">
+    <super>
+  </body>
+</html>

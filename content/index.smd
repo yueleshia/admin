@@ -1,0 +1,9 @@
+---
+.title = "Homepage",
+.date = @date("1990-01-01T00:00:00"),
+.author = "Yueleshia",
+.layout = "index.shtml",
+.draft = false,
+--- 
+
+Various utilties for automating my work. 

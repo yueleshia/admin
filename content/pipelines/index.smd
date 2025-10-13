@@ -1,0 +1,12 @@
+---
+.title = "Pipelines Dashboard",
+.description =
+  \\Centralized dashboard for workflow status of various repos I work on or follow.
+  \\In enterprise, I want to follow a large set of repos, especially scheduled jobs that are not part of regular development flow.
+,
+.date = @date("1990-01-01T00:00:00"),
+.author = "Yueleshia",
+.layout = "pipelines.shtml",
+.draft = false,
+--- 
+
