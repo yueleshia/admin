@@ -1,0 +1,398 @@
+<extend template="base.shtml">
+<head id="head">
+  <title>Pipelines Dashboard</title>
+  <style>
+    /* @view-transition { navigation: auto; } */
+
+    /* Layout */
+    .run {
+      display: grid;
+      list-style-type: '';
+      grid-gap: 0.5em;
+      grid-template-columns: 1fr auto 9em 6em;
+    }
+    .owner_repo      { display: inline-block; width: 10.5em; }
+
+    /* Styling */
+    .circlebutton {
+      display: inline;
+      padding: 0rem 0.2rem;
+      border: 1px outset buttonborder;
+      border-radius: 15px;
+      color: buttontext;
+      background-color: buttonface;
+      text-decoration: none;
+    }
+    .circlebutton:hover { background-color: lightgrey; }
+    .overflow-hidden    { overflow: hidden }
+    summary             { cursor: cell; } /* Indicate clickable */
+    .repo_list          { height: 1.5em; width: 100%; }
+    .repo_list:focus    { height: 30em; }
+  </style>
+  <script src="$site.asset('sigjs/sig.js').link()" defer></script>
+  <script src="$page.asset('lib.js').link()" defer></script>
+  <script>
+let GH_PAT = "";
+
+function debounce(ms, fn_debounce) {
+  let pid = 0;
+  const limit_ms = ms;
+
+  const run = (...args) => {
+    if (pid !== 0) clearTimeout(pid);
+    pid = setTimeout(fn_debounce.apply(null, args), limit_ms)
+  }
+  const cancel = (...args) => {
+    if (pid !== 0) clearTimeout(pid);
+  };
+  return [run, cancel];
+}
+  </script>
+  <script type="module">
+lib.IS_OFFLINE = false; // Config lib
+
+const REPO_LIST = [
+  "yueleshia/yueleshia.github.io",
+  "yueleshia/admin",
+  "ziglang/zig",
+  "tweag/nickel",
+];
+(() => {
+  const str = localStorage.getItem('REPO_LIST');
+  if (typeof str === "string") {
+    REPO_LIST.length = 0;
+    lib.split_repos_into(str, REPO_LIST);
+  }
+})();
+const RUN_DATA = new Array(); // Source of truth
+
+const STATUS_PENDING = 0;
+const STATUS_COMPLETE = 1;
+
+function queue_error(e) {
+  console.error("ERROR: ", e);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Components
+
+const UI_STATE = {
+  slots: new Array(),
+};
+let {article, details, summary, aside, div, span, a, button, ul, li} = sig.tags;
+
+async function details_toggle(e) {
+  if (e.target.open) {
+    const idx = parseInt(e.target.dataset.idx);
+    if (typeof idx !== "number" && !isNan(idx)) queue_error(`Missing data-idx on <details>: ${e.target.dataset.idx}`);
+
+    const run = RUN_DATA[idx];
+    const ui  = UI_STATE.slots[idx];
+    if (run.run_id !== ui.run_id.get()) {
+      const message = "UI_STATE and RUN_DATA are out of sync";
+      console.error(message);
+      document.getElementById(`slotbody${idx}`).textContent = message;
+      return;
+    }
+
+    const jobs = RUN_DATA[idx].jobs;
+    // Do not rerun again if there is already a pending request
+    if (jobs.length === 0 && ui.job_fetch_status !== STATUS_PENDING) {
+      ui.job_fetch_status.set(STATUS_PENDING);
+      const err = await lib.refresh_jobs(GH_PAT, run.owner_repo, run);
+      if (err) {
+        const message = err.message;
+        console.error(message);
+        document.getElementById(`slotbody${idx}`).textContent = message;
+      } else {
+        ui.job_fetch_status.set(STATUS_COMPLETE);
+      }
+    }
+  }
+}
+
+function Workflow(idx, x) {
+  return article({ id: `slot${idx}`, style: `view-transition-name: slot${idx}`, class: "run"},
+    details({ ontoggle: details_toggle, "data-idx": idx },
+      // header
+      summary({},
+        span({class: "overflow-hidden owner_repo"}, a({href: () => `https://github.com/${x.owner_repo.get()}`}, x.owner_repo.get)),
+        " ",
+        () => lib.conclusion_2_emoji(x.conclusion.get()),
+        " ",
+        a({href: () => `https://github.com/${x.owner_repo.get()}/actions/runs/${x.run_id.get()}`}, x.title.get),
+        span({ style: () => x.job_fetch_status.get() === STATUS_PENDING ? "display: inline" : "display: none" }, "⏳"),
+      ),
+      () => Jobs(idx, x.job_fetch_status.get()),
+    ),
+    a({href: () => x.actor.get().html_url}, () => x.actor.get().login),
+
+    span({class: "overflow-hidden"}, () => lib.format_timestamp(x.started_date.get())),
+    span({class: "overflow-hidden"}, () => {
+      const conclusion = x.conclusion.get();
+      const started = x.started_date.get();
+      const updated = x.updated_date.get();
+      return lib.format_duration(updated - started);
+    }),
+  );
+}
+
+function Jobs(idx, fetch_status) {
+  if (fetch_status === STATUS_PENDING) {
+    return div({ id: `slotbody${idx}` }, "fetching...");
+  } else {
+    const jobs = RUN_DATA[idx].jobs;
+    const node = div({ id: `slotbody${idx}` });
+    for (let i = 0; i < jobs.length; i += 1) {
+      const job = jobs[i];
+      node.append(div({}, lib.conclusion_2_emoji(job.conclusion), job.name === "" ?
+        job.workflow_name : job.name));
+
+      const job_node = ul({});
+      for (let j = 0; j < job.steps.length; j += 1) {
+        const step = job.steps[j];
+        job_node.append(li({}, lib.conclusion_2_emoji(step.conclusion), step.name))
+      }
+      node.append(job_node);
+    }
+    return node;
+  }
+}
+
+// `data` is our source of truth
+function render(data) {
+  const len = data.length;
+
+  // Ensure <div> slots are correctly attached/removed
+  if (UI_STATE.slots.length > len) {
+    console.log("Removing slots", UI_STATE.slots.length, len);
+    for (let i = len; i < UI_STATE.slots.length; i += 1) {
+      document.getElementById(`slot${i}`).remove();
+    }
+    UI_STATE.slots.length = len;
+  } else if (UI_STATE.slots.length < len) {
+    console.log("Adding slots", UI_STATE.slots.length, len);
+    for (let i = UI_STATE.slots.length; i < len; i += 1) {
+      const ui_state = {
+        run_id: sig.signal(0),
+        owner_repo: sig.signal(""),
+        title: sig.signal(""),
+        actor: sig.signal(""),
+        conclusion: sig.signal(""),
+        started_date: sig.signal(0),
+        updated_date: sig.signal(0),
+        job_fetch_status: sig.signal(STATUS_COMPLETE),
+      };
+      ui_state.node = Workflow(i, ui_state);
+      display.append(ui_state.node);
+      UI_STATE.slots.push(ui_state);
+    }
+  }
+
+  // Update all relevant signals
+  for (let i = 0; i < data.length; i += 1) {
+    const run = data[i];
+    const slot = UI_STATE.slots[i];
+
+    //console.log(slot);
+    slot.run_id.set(run.run_id);
+    slot.owner_repo.set(run.owner_repo);
+    slot.title.set(run.name);
+    slot.actor.set(run.actor);
+    slot.started_date.set(run.started_date),
+    slot.updated_date.set(run.updated_date),
+    slot.conclusion.set(run.conclusion);
+    slot.job_fetch_status.set(run.conclusion);
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+const [refresh_runs_init, refresh_runs_tick] = (() => {
+  const CACHE_MAP = new Map(); // For retaining job and ui_state between ticks
+  const [signal_error, cancel_error] = debounce(300, (dom, e) => {
+    console.error(e);
+    dom.textContent = e.message
+  });
+
+  const RUN_PROMISES = new Array();
+  const init = async () => {
+    repo_list.value = REPO_LIST.join("\n");
+
+    // Render as data streams in
+    let has_errors = false;
+    RUN_PROMISES.length = 0;
+    for (let i = 0; i < REPO_LIST.length; i += 1) {
+      RUN_PROMISES.push(lib.refresh_run(GH_PAT, REPO_LIST[i], CACHE_MAP, RUN_DATA).then(err => {
+        if (err) has_errors = true, signal_error(popup, err);
+        RUN_DATA.sort((a, b) => b.started_date - a.started_date);
+        render(RUN_DATA);
+      }));
+    }
+    await Promise.all(RUN_PROMISES);
+    if (!has_errors) cancel_error(), popup.textContent = "";
+
+    // Reconstruct CACHE_MAP
+    CACHE_MAP.clear();
+    for (let i = 0; i < RUN_DATA.length; i += 1) {
+      const post = RUN_DATA[i];
+      CACHE_MAP.set(post.run_id, post);
+    }
+  };
+
+  // Unlike init, render only after all fetches are complete
+  const RUN_DATA_TEMP = new Array(); // Retain memory allocation
+  const tick = async () => {
+    RUN_DATA_TEMP.length = 0;
+    RUN_PROMISES.length = 0;
+    let has_errors = false;
+    for (let i = 0; i < REPO_LIST.length; i += 1) {
+      RUN_PROMISES.push(
+        lib.refresh_run(GH_PAT, REPO_LIST[i], CACHE_MAP, RUN_DATA_TEMP)
+        .then(err => {if (err) has_errors = true, signal_error(popup, err)})
+      );
+    }
+    await Promise.all(RUN_PROMISES);
+    if (!has_errors) cancel_error(), popup.textContent = "";
+
+    // We delay overwriting master RUN_DATA
+    // User might expand a run and fetch a job which relies on RUN_DATA
+    RUN_DATA.length = 0;
+    for (let i = 0; i < RUN_DATA_TEMP.length; i += 1) {
+      RUN_DATA.push(RUN_DATA_TEMP[i]);
+    }
+    RUN_DATA_TEMP.length = 0;
+
+    // Reconstruct CACHE_MAP
+    CACHE_MAP.clear();
+    for (let i = 0; i < RUN_DATA.length; i += 1) {
+      const post = RUN_DATA[i];
+      CACHE_MAP.set(post.run_id, post);
+    }
+    RUN_DATA.sort((a, b) => b.started_date - a.started_date)
+    render(RUN_DATA);
+  }
+
+  return [init, tick];
+})();
+
+////////////////////////////////////////////////////////////////////////////////
+
+queueMicrotask(refresh_runs_init, 0)
+
+window.refresh = (() => {
+  let last_run = 0;
+  let clear_pid = 0;
+  const repo_list_temp = new Array();
+  const limit_s = 1;
+  const limit_ms = limit_s * 1000;
+
+  const clear = () => {
+    if (clear_pid !== 0) clearTimeout(clear_pid);
+    clear_pid = 0;
+    refresh_status.textContent = "";
+  };
+
+  // Throttle by limit_s
+  return async (is_check_repo_list) => {
+    const now = Date.now();
+
+    // If update to repo_list, only refresh if list has changed
+    continue_rendering: if (is_check_repo_list) {
+      repo_list_temp.length = 0;
+      lib.split_repos_into(repo_list.value, repo_list_temp);
+      repo_list_temp.sort();
+      const original_sorted = [...REPO_LIST].sort();
+      const len = repo_list_temp.length;
+      if (len === original_sorted.length) for (let i = 0; i < len; i += 1) {
+        if (original_sorted[i] !== repo_list_temp[i]) {
+          REPO_LIST.length = 0;
+          lib.split_repos_into(repo_list.value, REPO_LIST);
+          console.log("Saving REPO_LIST to localStorage");
+          console.log(REPO_LIST.join("\n"));
+          localStorage.setItem("REPO_LIST", REPO_LIST.join("\n"));
+          break continue_rendering;
+        }
+      }
+      return;
+    }
+
+    if (now - last_run >= limit_ms) {
+      last_run = now;
+
+      // Refresh
+      refresh_status.style.color = "black";
+      refresh_status.textContent = "fetching...";
+      const err = await refresh_runs_tick();
+
+      // Cleanup messages
+      if (err) {
+        refresh_status.style.color = "red";
+        refresh_status.textContent = err;
+        return;
+      }
+      clear();
+
+      // Render
+      RUN_DATA.sort((a, b) => b.started_date - a.started_date)
+      render(RUN_DATA);
+
+    } else if (clear_pid === 0) {
+      refresh_status.style.color = "red";
+      refresh_status.textContent = `Wait ${limit_s}s to refresh`;
+      clear_pid = setTimeout(clear, limit_ms - (now - last_run))
+    }
+  };
+})();
+  </script>
+  <script>
+const [gh_pat_change, _] = debounce(300, async () => {
+  const token = gh_pat.value;
+  if (token === "") {
+    GH_PAT = "";
+    gh_pat_err.textContent = "";
+  } else {
+    const req = await fetch("https://api.github.com/octocat", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (req.status === 200) {
+      GH_PAT = token;
+      gh_pat_err.textContent = "✅";
+    } else {
+      GH_PAT = "";
+      try { // try to parse error message
+        const body = await req.json();
+        console.log(body);
+        gh_pat_err.textContent = body.message;
+      } catch (_e) {
+        gh_pat_err.textContent = "Invalid PAT";
+      }
+    }
+  }
+});
+  </script>
+</head>
+<body id="body">
+  <div>
+    <div style="float: right">
+      <span id="refresh_status"></span>
+      <button onclick="window.refresh(false)">🔃</button>
+    </div>
+    <div>
+      <input id="gh_pat" type="password" oninput="gh_pat_change();">
+      <span id="gh_pat_err" style="color: red"></span>
+
+      <span>github PAT<sup><a class="circlebutton" href="https://github.com/settings/personal-access-tokens">i</a></sup></span>
+      <span id="popup" style="color: red"></span>
+    </div>
+    <div>
+      <textarea id="repo_list" type="textbox" class="repo_list" onfocusout="window.refresh(true)">Need javascript to do anything useful</textarea>
+    </div>
+    <div id="display">
+    </div>
+  </div>
+  <script>
+  </script>
+</body>
